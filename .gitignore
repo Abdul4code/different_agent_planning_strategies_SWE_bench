@@ -1,0 +1,105 @@
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+build/
+develop-eggs/
+dist/
+downloads/
+eggs/
+.eggs/
+lib/
+lib64/
+parts/
+sdist/
+var/
+wheels/
+pip-wheel-metadata/
+share/python-wheels/
+*.egg-info/
+.installed.cfg
+*.egg
+MANIFEST
+
+# Virtual Environments
+env/
+venv/
+ENV/
+env.bak/
+venv.bak/
+.venv/
+
+# IDE & Editor
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+.DS_Store
+.project
+.pydevproject
+.settings/
+*.sublime-project
+*.sublime-workspace
+
+# Testing & Coverage
+.pytest_cache/
+.tox/
+.coverage
+.coverage.*
+.cache
+nosetests.xml
+coverage.xml
+*.cover
+*.py,cover
+.hypothesis/
+htmlcov/
+
+# Jupyter Notebook
+.ipynb_checkpoints
+
+# IPython
+profile_default/
+ipython_config.py
+
+# Results & Logs (generated files)
+results/
+logs/
+*.log
+.run/
+
+# Large evaluation files
+evaluation/
+*.json.backup
+
+# OS files
+Thumbs.db
+.DS_Store
+.AppleDouble
+.LSOverride
+
+# Node (if applicable)
+node_modules/
+npm-debug.log
+
+# Temporary files
+*.tmp
+*.bak
+*.swp
+*~
+.~*
+
+# Git
+.git/
+.gitmodules
+
+# Environment variables
+.env
+.env.local
+.env.*.local
+
+# Docker
+.docker/
+docker-compose.override.yml
