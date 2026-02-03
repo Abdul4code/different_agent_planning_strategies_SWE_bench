@@ -105,19 +105,31 @@ Results are saved to:
 
 ### CSV Fields
 
-| Field | Description |
-|-------|-------------|
-| `run_id` | Unique identifier |
-| `pattern` | Planning strategy used |
-| `task_id` | SWE-bench task ID |
-| `model` | Model name |
-| `submitted` | Whether a patch was produced |
-| `resolved` | Whether patch passed tests (after evaluation) |
-| `wall_time_s` | Total execution time |
-| `tokens_prompt` | Input tokens used |
-| `tokens_completion` | Output tokens used |
-| `llm_calls` | Number of LLM API calls |
-| `peak_mem_mb` | Peak memory usage |
+| Column | Type | Description | How It's Computed |
+|--------|------|-------------|-------------------|
+| `run_id` | `string` | Unique identifier for each run | Generated using `uuid.uuid4()` at the start of each task run |
+| `started_at` | `string` | ISO 8601 timestamp when run started | Captured via `datetime.now(timezone.utc).isoformat()` |
+| `pattern` | `string` | Planning strategy used | One of: `baseline`, `decomposed`, `external`, `multiplan`, `memory`, `reflection` |
+| `task_id` | `string` | SWE-bench task identifier | From the input `tasks_50.json` file (e.g., `sympy__sympy-23191`) |
+| `model` | `string` | LLM model name with provider prefix | CLI argument `--model` (e.g., `ollama/qwen2.5:7b`) |
+| `seed` | `int` | Random seed for reproducibility | CLI argument `--seeds` (default: `42`) |
+| `submitted` | `bool` | Whether agent produced a patch | `True` if agent called `MINI_SWE_AGENT_FINAL_OUTPUT` with a patch |
+| `resolved` | `bool` | Whether patch passed SWE-bench tests | Set by `evaluate_predictions.py` after running the SWE-bench harness. Initially `False` |
+| `runtime_s` | `float` | Total wall-clock execution time | `time.perf_counter()` difference between start and end |
+| `prompt_tokens` | `int` | Total input tokens sent to LLM | Accumulated via `LLMMetrics.on_llm_call()` across all LLM calls |
+| `completion_tokens` | `int` | Total output tokens from LLM | Accumulated via `LLMMetrics.on_llm_call()` across all LLM calls |
+| `total_tokens` | `int` | Sum of prompt + completion tokens | `prompt_tokens + completion_tokens` |
+| `llm_calls` | `int` | Number of LLM API calls made | Counter incremented each time model is queried |
+| `energy_kwh` | `float` | Energy consumed in kilowatt-hours | Parsed from CodeCarbon's `emissions.csv` (only if `--use_codecarbon`) |
+| `co2_kg` | `float` | CO₂ emissions in kilograms | Returned by `EmissionsTracker.stop()` from CodeCarbon |
+| `peak_rss_mb` | `float` | Peak memory usage in MB | `PeakMemorySampler` samples process RSS every 0.1s and tracks max |
+| `error_type` | `string` | Error classification if run failed | Categorized as: `timeout`, `submitted`, specific exception names, or empty |
+
+#### Key Notes
+
+- **submitted vs resolved**: `submitted=True` means the agent generated a patch; `resolved=True` means it actually fixed the bug (verified by SWE-bench harness)
+- **Token metrics (0 values)**: Indicates timeout before LLM calls, Docker failure, or metrics not captured
+- **error_type values**: `timeout` (exceeded 30 min), `submitted` (success), `TimeoutExpired` (Docker timeout), or empty
 
 ## Project Structure
 
