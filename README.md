@@ -18,7 +18,11 @@ Comparison of different LLM planning strategies on SWE-bench tasks using mini-sw
 ### 1. Setup
 
 ```bash
-# Set API key (choose one)
+# Clone the repository
+git clone https://github.com/Abdul4code/different_agent_planning_strategies_SWE_bench.git
+
+```bash
+# Set API key (If you are using remote API call else ignore this instruction)
 export OPENROUTER_API_KEY="your-key"  # OpenRouter (recommended)
 export OPENAI_API_KEY="your-key"      # OpenAI
 export ANTHROPIC_API_KEY="your-key"   # Anthropic
