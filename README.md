@@ -32,6 +32,9 @@ export MSWEA_COST_TRACKING='ignore_errors'
 
 # Pull Docker images (required for SWE-bench)
 docker pull docker.io/swebench/sweb.eval.x86_64.sympy_1776_sympy-17139:latest
+
+# (Recommended) Pre-pull all images for your tasks file to avoid per-task timeouts
+python prepull_swebench_images.py --tasks tasks_50.json --max_workers 4
 ```
 
 ### 2. Run Experiments with Orchestrator
