@@ -22,6 +22,7 @@ import json
 import logging
 import os
 import sys
+import time
 import traceback
 from pathlib import Path
 
@@ -234,6 +235,11 @@ def run_single_task_with_agent(pattern: str, task: dict, output_dir: Path, model
     env = None
     agent = None
     extra_info = None
+
+    t0 = time.perf_counter()
+    t_env_ready = None
+    t_agent_done = None
+    t_end = None
     
     try:
         env_config = config_data.setdefault("environment", {})
@@ -243,8 +249,10 @@ def run_single_task_with_agent(pattern: str, task: dict, output_dir: Path, model
             env_config["image"] = image_name
         
         env = get_environment(env_config)
+        t_env_ready = time.perf_counter()
         agent = AgentClass(model_instance, env, **config_data.get("agent", {}))
         exit_status, result = agent.run(problem)
+        t_agent_done = time.perf_counter()
         
     except Exception as e:
         logging.error(f"Error: {e}")
@@ -254,6 +262,8 @@ def run_single_task_with_agent(pattern: str, task: dict, output_dir: Path, model
     finally:
         if env and hasattr(env, "stop"):
             env.stop()
+
+        t_end = time.perf_counter()
         
         traj_path = instance_dir / f"{instance_id}.traj.json"
         save_traj(
@@ -265,10 +275,23 @@ def run_single_task_with_agent(pattern: str, task: dict, output_dir: Path, model
             instance_id=instance_id,
         )
     
+    # Derive timings with reasonable fallbacks.
+    # container_setup_s: time spent in get_environment() (includes docker pull + run -d)
+    # agent_runtime_s: time spent inside AgentClass.run()
+    # wall_runtime_s: total time spent in this function's try/finally block
+    container_setup_s = (t_env_ready - t0) if t_env_ready is not None else 0.0
+    agent_runtime_s = (t_agent_done - t_env_ready) if (t_agent_done is not None and t_env_ready is not None) else 0.0
+    wall_runtime_s = (t_end - t0) if t_end is not None else 0.0
+
     return {
         "traj_path": traj_path,
         "exit_status": exit_status,
         "result": result,
+        "timings": {
+            "container_setup_s": round(container_setup_s, 6),
+            "agent_runtime_s": round(agent_runtime_s, 6),
+            "wall_runtime_s": round(wall_runtime_s, 6),
+        },
     }
 
 
@@ -334,6 +357,13 @@ def run_orchestrator_mode():
         
         # Extract metrics from trajectory
         metrics = extract_metrics_from_trajectory(result["traj_path"])
+
+        # Add timing breakdown so the orchestrator can exclude container startup from runtime.
+        timings = result.get("timings") or {}
+        if isinstance(timings, dict):
+            for key in ("container_setup_s", "agent_runtime_s", "wall_runtime_s"):
+                if key in timings:
+                    metrics[key] = timings[key]
         
         # Override with direct result info if trajectory extraction missed it
         # Use case-insensitive check for exit_status

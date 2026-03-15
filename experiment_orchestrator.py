@@ -303,6 +303,23 @@ def run_single_task(
         if "metrics" in result:
             metrics = result["metrics"]
             llm_metrics.update_from_dict(metrics)
+
+            # If the wrapper provided timing breakdowns, use them.
+            # - runtime_s: agent runtime excluding container startup
+            # - wall_runtime_s: end-to-end wall clock
+            # - container_setup_s: docker pull + run -d time
+            try:
+                if isinstance(metrics, dict):
+                    if "container_setup_s" in metrics and metrics["container_setup_s"] is not None:
+                        record.container_setup_s = float(metrics["container_setup_s"])
+                    if "wall_runtime_s" in metrics and metrics["wall_runtime_s"] is not None:
+                        record.wall_runtime_s = float(metrics["wall_runtime_s"])
+                    if "agent_runtime_s" in metrics and metrics["agent_runtime_s"] is not None:
+                        # This is the primary experiment time we care about.
+                        record.runtime_s = float(metrics["agent_runtime_s"])
+            except (ValueError, TypeError):
+                # Fall back to wall-clock timing if parsing fails
+                pass
             
             # Check for error in metrics JSON
             if "error" in metrics and metrics["error"]:
@@ -359,7 +376,13 @@ def run_single_task(
     finally:
         # Stop metrics collection
         end_time = time.perf_counter()
-        record.runtime_s = round(end_time - start_time, 3)
+        wall = round(end_time - start_time, 3)
+        # Preserve wall-clock runtime unless a more precise value was reported by the wrapper.
+        if not record.wall_runtime_s:
+            record.wall_runtime_s = wall
+        # If the wrapper didn't provide agent_runtime_s, fall back to wall time.
+        if not record.runtime_s:
+            record.runtime_s = wall
         
         memory_sampler.stop()
         record.peak_rss_mb = round(memory_sampler.peak_rss_mb, 2)

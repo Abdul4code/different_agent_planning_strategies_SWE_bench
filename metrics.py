@@ -253,6 +253,13 @@ class TaskRunRecord:
     submitted: bool = False  # True if agent submitted a patch (not verified as correct)
     resolved: bool = False   # True if SWE-bench harness verified the patch is correct
     runtime_s: float = 0.0
+    """Agent runtime in seconds (excludes container startup/pull time when available)."""
+
+    wall_runtime_s: float = 0.0
+    """End-to-end wall-clock runtime in seconds (includes container startup/pull time)."""
+
+    container_setup_s: float = 0.0
+    """Container startup time in seconds (pull + run -d) when available."""
     
     # LLM metrics
     prompt_tokens: int = 0
@@ -287,6 +294,8 @@ class TaskRunRecord:
             "submitted",
             "resolved",
             "runtime_s",
+            "wall_runtime_s",
+            "container_setup_s",
             "prompt_tokens",
             "completion_tokens",
             "total_tokens",
@@ -353,6 +362,28 @@ class CSVWriter:
                     writer.writeheader()
                 finally:
                     fcntl.flock(f.fileno(), fcntl.LOCK_UN)
+            return
+
+        # If the file exists but has an older header, upgrade it in-place.
+        with open(self.filepath, "r+", newline="") as f:
+            fcntl.flock(f.fileno(), fcntl.LOCK_EX)
+            try:
+                reader = csv.DictReader(f)
+                existing_fields = reader.fieldnames or []
+                if existing_fields == self.columns:
+                    return
+
+                rows = list(reader)
+
+                f.seek(0)
+                f.truncate(0)
+                writer = csv.DictWriter(f, fieldnames=self.columns)
+                writer.writeheader()
+                for row in rows:
+                    upgraded = {col: row.get(col, "") for col in self.columns}
+                    writer.writerow(upgraded)
+            finally:
+                fcntl.flock(f.fileno(), fcntl.LOCK_UN)
     
     def write_record(self, record: TaskRunRecord) -> None:
         """
