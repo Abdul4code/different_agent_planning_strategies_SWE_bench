@@ -285,6 +285,18 @@ def run_orchestrator_mode():
     parser.add_argument("--config", help="Config file path")
     
     args = parser.parse_args()
+
+    # Normalize model name for LiteLLM-style provider prefixes.
+    # Many local Ollama models are passed as `model:tag` (e.g. qwen2.5-coder:14b),
+    # but LiteLLM expects `ollama/<model:tag>`.
+    if args.model and "/" not in args.model:
+        if ":" in args.model:
+            args.model = f"ollama/{args.model}"
+        else:
+            raise ValueError(
+                "LLM provider not provided. Pass `--model <provider>/<model>` "
+                "(examples: `ollama/qwen2.5-coder:14b`, `openrouter/openai/gpt-4o-mini`, `openai/gpt-4o`)."
+            )
     
     valid_patterns = ["baseline", "decomposed", "multiplan", "external", "memory", "reflection"]
     if args.pattern not in valid_patterns:
