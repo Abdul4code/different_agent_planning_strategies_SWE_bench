@@ -29,8 +29,13 @@ class DockerEnvironmentConfig(BaseModel):
     """
     container_timeout: str = "2h"
     """Max duration to keep container running. Uses the same format as the sleep command."""
-    pull_timeout: int = 120
-    """Timeout in seconds for pulling images."""
+    pull_timeout: int = int(os.getenv("MSWEA_DOCKER_START_TIMEOUT", "1800"))
+    """Timeout in seconds for starting the container.
+
+    Note: `docker run -d ...` can block while pulling images. On macOS (especially Apple
+    Silicon running x86_64 images under emulation) first start can take several minutes.
+    Configure via `MSWEA_DOCKER_START_TIMEOUT`.
+    """
 
 
 class DockerEnvironment:
