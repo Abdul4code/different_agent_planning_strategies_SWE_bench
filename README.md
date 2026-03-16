@@ -49,9 +49,10 @@ python experiment_orchestrator.py \
     --tasks tasks_50.json \
     --patterns baseline decomposed multiplan \
     --model openrouter/openai/gpt-4o-mini \
+    --timeout_s 1800 \
     --max_workers 4 \
-    --out results/experiment_runs.csv
-    --resume
+    --out results/experiment_runs.csv \
+    --resume \
     --use_codecarbon
 ```
 

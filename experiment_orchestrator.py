@@ -251,36 +251,41 @@ def run_single_task(
     # Get the agent folder for this pattern
     agent_folder = PATTERN_FOLDER_MAP.get(pattern, "mini-swe-agent")
     
-    # Set up CodeCarbon if enabled
+    # Set up CodeCarbon and memory sampling.
+    # In subprocess mode, these should reflect *agent runtime only* (excluding container setup).
+    # The wrapper knows the exact boundaries, so it is responsible for energy/memory tracking.
     tracker = None
     codecarbon_output_dir = None
-    
-    if use_codecarbon:
-        try:
-            from codecarbon import EmissionsTracker
-            codecarbon_output_dir = tempfile.mkdtemp(prefix="codecarbon_")
-            tracker = EmissionsTracker(
-                output_dir=codecarbon_output_dir,
-                log_level="error",
-                save_to_file=True,
-                allow_multiple_runs=True,
-            )
-        except ImportError:
-            logger.warning("CodeCarbon not installed, energy tracking disabled")
-            use_codecarbon = False
-        except Exception as e:
-            logger.warning(f"CodeCarbon initialization failed: {e}, energy tracking disabled")
-            use_codecarbon = False
-            tracker = None
-    
-    # Start metrics collection
-    memory_sampler = PeakMemorySampler(interval_s=0.1)
+
+    memory_sampler: Optional[PeakMemorySampler] = None
+
+    if runner_mode == "import":
+        memory_sampler = PeakMemorySampler(interval_s=0.1)
+
+        if use_codecarbon:
+            try:
+                from codecarbon import EmissionsTracker
+                codecarbon_output_dir = tempfile.mkdtemp(prefix="codecarbon_")
+                tracker = EmissionsTracker(
+                    output_dir=codecarbon_output_dir,
+                    log_level="error",
+                    save_to_file=True,
+                    allow_multiple_runs=True,
+                )
+            except ImportError:
+                logger.warning("CodeCarbon not installed, energy tracking disabled")
+                use_codecarbon = False
+            except Exception as e:
+                logger.warning(f"CodeCarbon initialization failed: {e}, energy tracking disabled")
+                use_codecarbon = False
+                tracker = None
     llm_metrics = LLMMetrics()
     
     start_time = time.perf_counter()
     
     try:
-        memory_sampler.start()
+        if memory_sampler:
+            memory_sampler.start()
         
         if tracker:
             tracker.start()
@@ -292,7 +297,7 @@ def run_single_task(
             )
         else:
             result = _run_via_subprocess(
-                pattern, task_id, model, seed, agent_folder, timeout_s, llm_metrics
+                pattern, task_id, model, seed, agent_folder, timeout_s, use_codecarbon, llm_metrics
             )
         
         # Extract results - 'submitted' means the agent produced a patch (not yet verified)
@@ -317,6 +322,14 @@ def run_single_task(
                     if "agent_runtime_s" in metrics and metrics["agent_runtime_s"] is not None:
                         # This is the primary experiment time we care about.
                         record.runtime_s = float(metrics["agent_runtime_s"])
+
+                    # Agent-only metrics emitted by the wrapper.
+                    if "peak_rss_mb" in metrics and metrics["peak_rss_mb"] is not None:
+                        record.peak_rss_mb = float(metrics["peak_rss_mb"])
+                    if "energy_kwh" in metrics and metrics["energy_kwh"] is not None:
+                        record.energy_kwh = float(metrics["energy_kwh"])
+                    if "co2_kg" in metrics and metrics["co2_kg"] is not None:
+                        record.co2_kg = float(metrics["co2_kg"])
             except (ValueError, TypeError):
                 # Fall back to wall-clock timing if parsing fails
                 pass
@@ -384,8 +397,11 @@ def run_single_task(
         if not record.runtime_s:
             record.runtime_s = wall
         
-        memory_sampler.stop()
-        record.peak_rss_mb = round(memory_sampler.peak_rss_mb, 2)
+        if memory_sampler:
+            memory_sampler.stop()
+            # Only fill if wrapper didn't already provide an agent-only value.
+            if not record.peak_rss_mb:
+                record.peak_rss_mb = round(memory_sampler.peak_rss_mb, 2)
         
         # Collect LLM metrics
         metrics_dict = llm_metrics.to_dict()
@@ -473,6 +489,7 @@ def _run_via_subprocess(
     seed: int,
     agent_folder: str,
     timeout_s: int,
+    use_codecarbon: bool,
     llm_metrics: LLMMetrics,
 ) -> Dict[str, Any]:
     """
@@ -492,6 +509,9 @@ def _run_via_subprocess(
         "--seed", str(seed),
         "--agent_folder", agent_folder,
     ]
+
+    if use_codecarbon:
+        cmd.append("--use_codecarbon")
     
     logger.debug(f"Running subprocess: {' '.join(cmd)}")
     
