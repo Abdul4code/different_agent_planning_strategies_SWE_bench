@@ -423,6 +423,43 @@ def run_orchestrator_mode():
         
         # Set model
         config_data.setdefault("model", {})["model_name"] = args.model
+
+        # If using Ollama, bump defaults to avoid:
+        # - 10 minute client-side request timeouts (LiteLLM default request_timeout is often 600s)
+        # - 4096 token prompt truncation (Ollama context window)
+        #
+        # We treat a model as "Ollama" if:
+        # - it uses the explicit `ollama/` (or `ollama_chat/`) prefix, OR
+        # - it's an unprefixed local model name AND the user configured an Ollama base URL.
+        model_name = str(args.model or "")
+        ollama_base_env = (
+            os.getenv("OLLAMA_API_BASE")
+            or os.getenv("OLLAMA_HOST")
+            or os.getenv("OLLAMA_BASE_URL")
+        )
+        is_ollama = model_name.startswith(("ollama/", "ollama_chat/", "local")) or (
+            "/" not in model_name and bool(ollama_base_env)
+        )
+
+        if is_ollama:
+            model_cfg = config_data.setdefault("model", {})
+            model_kwargs = model_cfg.setdefault("model_kwargs", {})
+
+            # Seconds. Override with `MSWEA_LITELLM_REQUEST_TIMEOUT`.
+            try:
+                request_timeout_s = int(os.getenv("MSWEA_LITELLM_REQUEST_TIMEOUT", "1800"))
+            except ValueError:
+                request_timeout_s = 1800
+
+            # Tokens. Override with `MSWEA_OLLAMA_NUM_CTX`.
+            try:
+                num_ctx = int(os.getenv("MSWEA_OLLAMA_NUM_CTX", "10000"))
+            except ValueError:
+                num_ctx = 10000
+
+            # Only set defaults if the config didn't explicitly specify them.
+            model_kwargs.setdefault("request_timeout", request_timeout_s)
+            model_kwargs.setdefault("num_ctx", num_ctx)
         
         # Auto-disable cost tracking for certain models
         if "MSWEA_COST_TRACKING" not in os.environ:
