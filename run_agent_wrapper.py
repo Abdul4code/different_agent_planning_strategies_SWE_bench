@@ -22,6 +22,7 @@ import json
 import logging
 import os
 import sys
+import tempfile
 import time
 import traceback
 from pathlib import Path
@@ -185,7 +186,15 @@ def extract_metrics_from_trajectory(traj_path: Path) -> dict:
     return metrics
 
 
-def run_single_task_with_agent(pattern: str, task: dict, output_dir: Path, model: str, config_data: dict) -> dict:
+def run_single_task_with_agent(
+    pattern: str,
+    task: dict,
+    output_dir: Path,
+    model: str,
+    config_data: dict,
+    *,
+    use_codecarbon: bool = False,
+) -> dict:
     """Run a single task with the specified agent pattern."""
     import importlib.util
     
@@ -236,6 +245,10 @@ def run_single_task_with_agent(pattern: str, task: dict, output_dir: Path, model
     agent = None
     extra_info = None
 
+    peak_rss_mb: float | None = None
+    energy_kwh: float | None = None
+    co2_kg: float | None = None
+
     t0 = time.perf_counter()
     t_env_ready = None
     t_agent_done = None
@@ -251,8 +264,61 @@ def run_single_task_with_agent(pattern: str, task: dict, output_dir: Path, model
         env = get_environment(env_config)
         t_env_ready = time.perf_counter()
         agent = AgentClass(model_instance, env, **config_data.get("agent", {}))
-        exit_status, result = agent.run(problem)
-        t_agent_done = time.perf_counter()
+
+        # Collect metrics for agent runtime only (exclude container setup).
+        from metrics import PeakMemorySampler, parse_codecarbon_csv
+
+        memory_sampler = PeakMemorySampler(interval_s=0.1)
+
+        tracker = None
+        codecarbon_output_dir = None
+        if use_codecarbon:
+            try:
+                from codecarbon import EmissionsTracker
+
+                # Keep CodeCarbon quiet by default.
+                os.environ.setdefault("CODECARBON_LOG_LEVEL", "error")
+                codecarbon_output_dir = tempfile.mkdtemp(prefix="codecarbon_agent_")
+                tracker = EmissionsTracker(
+                    output_dir=codecarbon_output_dir,
+                    log_level="error",
+                    save_to_file=True,
+                    allow_multiple_runs=True,
+                )
+            except Exception:
+                tracker = None
+                codecarbon_output_dir = None
+
+        try:
+            memory_sampler.start()
+            if tracker:
+                tracker.start()
+
+            exit_status, result = agent.run(problem)
+            t_agent_done = time.perf_counter()
+
+        finally:
+            memory_sampler.stop()
+            peak_rss_mb = float(round(memory_sampler.peak_rss_mb, 2))
+
+            if tracker:
+                try:
+                    emissions = tracker.stop()
+                    co2_kg = float(round(emissions, 8)) if emissions else None
+
+                    if codecarbon_output_dir:
+                        csv_path = Path(codecarbon_output_dir) / "emissions.csv"
+                        energy_data = parse_codecarbon_csv(csv_path)
+                        if "energy_kwh" in energy_data:
+                            energy_kwh = float(round(energy_data["energy_kwh"], 8))
+                finally:
+                    if codecarbon_output_dir:
+                        try:
+                            import shutil
+
+                            shutil.rmtree(codecarbon_output_dir)
+                        except Exception:
+                            pass
         
     except Exception as e:
         logging.error(f"Error: {e}")
@@ -287,6 +353,11 @@ def run_single_task_with_agent(pattern: str, task: dict, output_dir: Path, model
         "traj_path": traj_path,
         "exit_status": exit_status,
         "result": result,
+        "agent_metrics": {
+            "peak_rss_mb": peak_rss_mb,
+            "energy_kwh": energy_kwh,
+            "co2_kg": co2_kg,
+        },
         "timings": {
             "container_setup_s": round(container_setup_s, 6),
             "agent_runtime_s": round(agent_runtime_s, 6),
@@ -303,6 +374,11 @@ def run_orchestrator_mode():
     parser.add_argument("--model", default="openai/gpt-4", help="Model to use (e.g., openai/gpt-4, anthropic/claude-sonnet-4-5-20250929)")
     parser.add_argument("--seed", type=int, default=42, help="Random seed")
     parser.add_argument("--agent_folder", help="Agent folder (auto-detected from pattern)")
+    parser.add_argument(
+        "--use_codecarbon",
+        action="store_true",
+        help="Track energy/CO2 for agent runtime only (excludes container setup)",
+    )
     parser.add_argument("--tasks_file", default="tasks_50.json", help="Tasks file path")
     parser.add_argument("--output_dir", default="results/orchestrator_runs", help="Output directory")
     parser.add_argument("--config", help="Config file path")
@@ -353,7 +429,14 @@ def run_orchestrator_mode():
             os.environ["MSWEA_COST_TRACKING"] = "ignore_errors"
         
         # Run the agent
-        result = run_single_task_with_agent(args.pattern, task, output_dir, args.model, config_data)
+        result = run_single_task_with_agent(
+            args.pattern,
+            task,
+            output_dir,
+            args.model,
+            config_data,
+            use_codecarbon=bool(args.use_codecarbon),
+        )
         
         # Extract metrics from trajectory
         metrics = extract_metrics_from_trajectory(result["traj_path"])
@@ -364,6 +447,13 @@ def run_orchestrator_mode():
             for key in ("container_setup_s", "agent_runtime_s", "wall_runtime_s"):
                 if key in timings:
                     metrics[key] = timings[key]
+
+        # Merge agent-only energy/memory metrics (may be None if not available).
+        agent_metrics = result.get("agent_metrics") or {}
+        if isinstance(agent_metrics, dict):
+            for key in ("peak_rss_mb", "energy_kwh", "co2_kg"):
+                if key in agent_metrics:
+                    metrics[key] = agent_metrics[key]
         
         # Override with direct result info if trajectory extraction missed it
         # Use case-insensitive check for exit_status
